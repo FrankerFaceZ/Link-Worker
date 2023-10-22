@@ -1,0 +1,14 @@
+name = "ffz-link-worker"
+main = "src/index.ts"
+compatibility_date = "2023-08-15"
+node_compat = true
+
+account_id = "<CLOUDFLARE_ACCOUNT_ID>"
+
+analytics_engine_datasets = [
+    { binding = "ANALYTICS", dataset = "<DATASET_NAME>" }
+]
+
+kv_namespaces = [
+    { binding = "SESSION", id = "<KV_ID>" }
+]

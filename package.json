@@ -1,0 +1,17 @@
+{
+  "name": "ffz-link-worker",
+  "private": true,
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20231016.0",
+    "cross-env": "^7.0.3",
+    "wrangler": "3.14.0"
+  },
+  "scripts": {
+    "dev": "wrangler dev --local-protocol=https",
+    "start": "wrangler dev --local-protocol=https"
+  },
+  "dependencies": {
+    "@ffz/link-service": "^5.0.0",
+    "isbot": "^3.7.0"
+  }
+}

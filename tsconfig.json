@@ -1,0 +1,17 @@
+{
+    "compilerOptions": {
+        "target": "esnext",
+        "module": "esnext",
+        "lib": ["esnext"],
+        "alwaysStrict": true,
+        "strict": true,
+        "moduleResolution": "nodenext",
+        "allowSyntheticDefaultImports": true,
+        "noImplicitAny": true,
+        "typeRoots": [
+            "./custom_types",
+            "./node_modules/@types",
+            "./node_modules/@cloudflare/workers-types"
+        ],
+    }
+}
