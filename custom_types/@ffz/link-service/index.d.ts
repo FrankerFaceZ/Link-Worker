@@ -1,6 +1,20 @@
 
 declare module '@ffz/link-service' {
 
+    export type CacheResult = {
+        hit: boolean;
+        value: any
+    };
+
+    export type CacheOptions = {
+        ttl?: number;
+    };
+
+    export interface CacheInterface {
+        get(key: string, options?: CacheOptions): Promise<CacheResult>;
+        set(key: string, value: any, options?: CacheOptions): Promise<void>;
+    }
+
     export type ServiceConfig = {
         bluesky_api?: {
             identifier: string;
@@ -11,6 +25,9 @@ declare module '@ffz/link-service' {
             saveSession?: (data: any) => Promise<void>;
 
         };
+
+        cache?: CacheInterface | null,
+        fedicache?: CacheInterface | null,
 
         imgur_api?: {
             key: string[]

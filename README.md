@@ -30,9 +30,22 @@ Cloudflare's Worker platform, along with the `wrangler` tool.
       has strict login limits that a live service is very likely to run into
       without a session cache.
 
+   5. Update the `cache_db_name` and `cache_db_id` in `d1_databases` with values
+      for a database that you'd like to use for caching. We use D1 rather than
+      KV for caching because low latency is less of a concern than costs, and D1
+      is much cheaper for this use case. Currently, the cache is only used for
+      Fediverse lookups and it significantly cuts CPU time on subsequent hits to
+      domains. You can disable this cache by removing the d1_databases section.
+
 3. Make a copy of `env.sample` and name it `.dev.vars`, then update it with
    all the necessary API keys. If you don't have an API key for a given service
    just remove the relevant lines and that service's resolver will be disabled.
+
+3. If you're using the D1 cache, execute the following command to initialize the
+   cache table in the local database:
+   ```
+   wrangler d1 execute <cache_db_name> --local --file=schema.sql
+   ```
 
 4. Run the worker locally with `pnpm dev` and use our
    [testing tool](https://docs.frankerfacez.com/dev/link-preview/tester) with
@@ -50,7 +63,13 @@ Following along from the previous instructions:
 5. Assuming everything has gone to plan, upload your secrets from `.dev.vars`
    using wrangler.
 
-6. Finally, run `pnpm wrangler deploy` to deploy the worker.
+6. If you're using the D1 cache, execute the following command to initialize
+   cache table in the production database:
+   ```
+   wrangler d1 execute <cache_db_name> --file=schema.sql
+   ```
+
+7. Finally, run `pnpm wrangler deploy` to deploy the worker.
 
 
 ## About Environment Variables

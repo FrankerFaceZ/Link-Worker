@@ -2,9 +2,6 @@ import { ErrorDocument, ResolveResult } from "@ffz/link-service";
 import { GLOBAL_HEADERS } from "./constants";
 import isbot from "isbot";
 
-declare const ANALYTICS: AnalyticsEngineDataset;
-
-
 export type SimpleResponseInit = {
     status?: number;
     headers?: Record<string, string>;
@@ -91,6 +88,7 @@ export function responseError(status: number, msg: any) {
  * @param response The response being returned.
  */
 export function writeAnalytics(
+    dataset: AnalyticsEngineDataset,
     request: Request,
     target: string,
     hostname: string,
@@ -104,8 +102,7 @@ export function writeAnalytics(
 
         save_url = visited_urls >= 20;
 
-
-    ANALYTICS.writeDataPoint({
+    dataset.writeDataPoint({
         indexes: [
             // index1: hostname
             hostname

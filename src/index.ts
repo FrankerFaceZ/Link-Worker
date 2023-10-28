@@ -1,100 +1,169 @@
 
-import LinkService, { BaseError, type ResolveResult, type ServiceConfig } from '@ffz/link-service';
+import LinkService, { BaseError, CacheInterface, CacheOptions, CacheResult, type ResolveResult, type ServiceConfig } from '@ffz/link-service';
 import isbot from 'isbot';
 
 import { responseError, responseJSON, responseRedirect, writeAnalytics } from './utilities';
 import { GLOBAL_HEADERS } from './constants';
 
-declare const BLUESKY_IDENTIFIER: string | undefined;
-declare const BLUESKY_PASSWORD: string | undefined;
-declare const BLUESKY_SERVICE: string | undefined;
-declare const IMGUR_KEY: string | undefined;
-declare const TWITCH_ID: string | undefined;
-declare const TWITCH_SECRET: string | undefined;
-declare const YOUTUBE_KEY: string | undefined;
-declare const PROXY_HOST: string | undefined;
-declare const PROXY_KEY: string | undefined;
-declare const SB_SERVER: string | undefined;
+type Environment = {
+	BLUESKY_IDENTIFIER?: string;
+	BLUESKY_PASSWORD?: string;
+	BLUESKY_SERVICE?: string;
+	IMGUR_KEY?: string;
+	TWITCH_ID?: string;
+	TWITCH_SECRET?: string;
+	YOUTUBE_KEY?: string;
+	PROXY_HOST?: string;
+	PROXY_KEY?: string;
+	SB_SERVER?: string;
 
-declare const ANALYTICS: AnalyticsEngineDataset | undefined;
-declare const SESSION: KVNamespace | undefined;
-
-
-// Configuration
-
-const CONFIG: ServiceConfig = {
-	// Various API Keys
-	bluesky_api: typeof BLUESKY_IDENTIFIER === 'string' && BLUESKY_IDENTIFIER
-		? {
-			identifier: BLUESKY_IDENTIFIER,
-			password: BLUESKY_PASSWORD as string,
-			service: typeof BLUESKY_SERVICE === 'string'
-				? BLUESKY_SERVICE : undefined
-		}
-		: undefined,
-
-	imgur_api: typeof IMGUR_KEY === 'string' && IMGUR_KEY
-		? {
-			key: [
-				IMGUR_KEY
-			]
-		}
-		: undefined,
-
-	twitch_api: typeof TWITCH_ID === 'string' && TWITCH_ID
-		? {
-			id: TWITCH_ID,
-			secret: TWITCH_SECRET as string
-		}
-		: undefined,
-
-	youtube_api: typeof YOUTUBE_KEY === 'string' && YOUTUBE_KEY
-		? {
-			key: YOUTUBE_KEY
-		}
-		: undefined,
-
-	// And the keys for the image proxy
-	image_proxy: typeof PROXY_HOST === 'string'
-		? {
-			host: PROXY_HOST === 'ALLOW_UNSAFE_IMAGES'
-				? LinkService.ALLOW_UNSAFE_IMAGES
-				: PROXY_HOST,
-			key: typeof PROXY_KEY === 'string'
-				? PROXY_KEY : null
-		}
-		: undefined,
-
-	safe_browsing_server: typeof SB_SERVER === 'string'
-		? SB_SERVER
-		: undefined,
-
-	// Set the FFZBot User-Agent, since the default UA doesn't match.
-	user_agent: `Mozilla/5.0 (compatible; FFZBot/${LinkService.VERSION}; +https://www.frankerfacez.com)`,
-
-	// If we're connected to logging, we'll want to be able to see why
-	// a response is returning a bad status code. This is useful for knowing
-	// if/how we're hitting bot protections.
-	log_error_responses: true,
-
-	// Disable these checks because we're running into CPU time limits.
-	// TODO: Write another service that does all the safety checks in one
-	// fetch call that this service can make.
-	use_cloudflare_dns: false,
-	use_iplogger_list: false,
-
-	// mmmagic is unavailable in a worker environment
-	use_mmmagic: false,
+	ANALYTICS?: AnalyticsEngineDataset;
+	SESSION?: KVNamespace;
+	CACHE_DB?: D1Database;
 }
 
-if ( CONFIG.bluesky_api && typeof SESSION !== 'undefined' ) {
-	CONFIG.bluesky_api.loadSession = () => SESSION.get('bsky-session', {type: 'json'});
-	CONFIG.bluesky_api.saveSession = data => SESSION.put('bsky-session', JSON.stringify(data));
+
+function buildConfig(env: Environment): ServiceConfig {
+	let cache: CacheInterface | undefined;
+
+	if ( env.CACHE_DB ) {
+		const CACHE_DB = env.CACHE_DB;
+		cache = {
+			async get(key: string, options?: CacheOptions): Promise<CacheResult> {
+				let result;
+				try {
+					result = await CACHE_DB.prepare(
+							'SELECT * FROM cache_entry WHERE key = ?'
+						).bind(key).first();
+				} catch(err) {
+					console.log('D1 error', err);
+					result = null;
+				}
+
+				if ( result?.key === key && result.value ) {
+					const ttl = options?.ttl ?? (result.ttl as number) ?? 3600,
+						expires = (result.created as number) + (ttl * 1000);
+
+					if ( expires > Date.now() ) {
+						try {
+							return {
+								hit: true,
+								value: JSON.parse(result.value as string)
+							}
+						} catch(err) {
+							/* no-op */
+						}
+					}
+				}
+
+				return {
+					hit: false,
+					value: null
+				}
+			},
+
+			async set(key: string, value: any, options?: CacheOptions): Promise<void> {
+				const ttl = options?.ttl ?? 3600,
+					created = Date.now();
+	
+				try {
+					await CACHE_DB.prepare(
+						'INSERT INTO cache_entry(key,value,ttl,created) VALUES(?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, ttl=excluded.ttl, created=excluded.created;'
+					).bind(key, JSON.stringify(value), ttl, created).run();
+				} catch(err) {
+					console.log('D1 set error', err);
+				}
+			}
+		};
+	}
+	
+	// Configuration
+	
+	const config: ServiceConfig = {
+		// Various API Keys
+		bluesky_api: env.BLUESKY_IDENTIFIER
+			? {
+				identifier: env.BLUESKY_IDENTIFIER,
+				password: env.BLUESKY_PASSWORD as string,
+				service: env.BLUESKY_SERVICE
+			}
+			: undefined,
+	
+		imgur_api: env.IMGUR_KEY
+			? {
+				key: [
+					env.IMGUR_KEY
+				]
+			}
+			: undefined,
+	
+		twitch_api: env.TWITCH_ID
+			? {
+				id: env.TWITCH_ID,
+				secret: env.TWITCH_SECRET as string
+			}
+			: undefined,
+	
+		youtube_api: env.YOUTUBE_KEY
+			? {
+				key: env.YOUTUBE_KEY
+			}
+			: undefined,
+	
+		// And the keys for the image proxy
+		image_proxy: env.PROXY_HOST
+			? {
+				host: env.PROXY_HOST === 'ALLOW_UNSAFE_IMAGES'
+					? LinkService.ALLOW_UNSAFE_IMAGES
+					: env.PROXY_HOST,
+				key: env.PROXY_KEY
+			}
+			: undefined,
+	
+		safe_browsing_server: env.SB_SERVER,
+	
+		// Set the FFZBot User-Agent, since the default UA doesn't match.
+		user_agent: `Mozilla/5.0 (compatible; FFZBot/${LinkService.VERSION}; +https://www.frankerfacez.com)`,
+	
+		// If we're connected to logging, we'll want to be able to see why
+		// a response is returning a bad status code. This is useful for knowing
+		// if/how we're hitting bot protections.
+		log_error_responses: true,
+	
+		// Disable these checks because we're running into CPU time limits.
+		// TODO: Write another service that does all the safety checks in one
+		// fetch call that this service can make.
+		use_cloudflare_dns: false,
+		use_iplogger_list: false,
+	
+		// Use a D1 database to cache fediverse checks.
+		fedicache: cache,
+	
+		// mmmagic is unavailable in a worker environment
+		use_mmmagic: false,
+	}
+	
+	if ( config.bluesky_api && env.SESSION ) {
+		const SESSION = env.SESSION;
+		config.bluesky_api.loadSession = () => SESSION.get('bsky-session', {type: 'json'});
+		config.bluesky_api.saveSession = data => SESSION.put('bsky-session', JSON.stringify(data));
+	}
+
+	return config;
 }
 
-// Now, create the service instance and set it up with all the default resolvers.
-const service = new LinkService(CONFIG);
-service.registerDefaultResolvers();
+let service: LinkService | undefined,
+	last_env: Environment | undefined;
+
+function getService(env: Environment): LinkService {
+	if ( env !== last_env || ! service ) {
+		last_env = env;
+		service = new LinkService(buildConfig(env));
+		service.registerDefaultResolvers();
+	}
+
+	return service;
+}
 
 
 // Here, we define a simple wrapper around the LinkService's resolve
@@ -102,7 +171,7 @@ service.registerDefaultResolvers();
 // time, they will hopefully be de-duplicated into a single request.
 const WAIT_MAP: Map<string | URL, Promise<ResolveResult>> = new Map;
 
-function getLink(link: string, normalized: URL): Promise<ResolveResult> {
+function getLink(service: LinkService, link: string, normalized: URL): Promise<ResolveResult> {
 	let promise = WAIT_MAP.get(link);
 	if ( ! promise ) {
 		promise = service.resolve(normalized).finally(() => {
@@ -124,13 +193,16 @@ function getLink(link: string, normalized: URL): Promise<ResolveResult> {
 // 6. Also, when returning a response, write an analytics event.
 
 async function handle(
-	event: FetchEvent,
+	request: Request,
 	origin: string,
 	target: string,
-	skip_cache: boolean
+	skip_cache: boolean,
+	env: Environment,
+	ctx: ExecutionContext
 ): Promise<Response> {
 
-	const cache = caches.default;
+	const cache = caches.default,
+		service = getService(env);
 	
 	// First, use the service to normalize the URL. This doesn't
 	// do much, but it gives us a starting point.
@@ -164,9 +236,10 @@ async function handle(
 	// return the cached result.
 	if ( cached ) {
 		console.log(`Cache hit for: ${cache_url}`);
-		if ( typeof ANALYTICS !== 'undefined' )
+		if ( env.ANALYTICS )
 			writeAnalytics(
-				event.request,
+				env.ANALYTICS,
+				request,
 				target,
 				normalized.hostname,
 				true,
@@ -183,16 +256,17 @@ async function handle(
 	// So, let's get a result from the link service.
 	let result;
 	try {
-		result = await getLink(normalized_str, normalized);
+		result = await getLink(service, normalized_str, normalized);
 	} catch (err) {
 		console.error(err);
 		return responseError(500, "An internal server error occurred.");
 	}
 
 	// Write an analytics event.
-	if ( typeof ANALYTICS !== 'undefined' )
+	if ( env.ANALYTICS )
 		writeAnalytics(
-			event.request,
+			env.ANALYTICS,
+			request,
 			target,
 			normalized.hostname,
 			false,
@@ -202,102 +276,87 @@ async function handle(
 	// Now wrap the response into a JSON object.
 	const response = responseJSON(result, {
 		headers: {
-			'Cache-Control': 'public, max-age=300'
+			'Cache-Control': 'public, max-age=1800'
 		}
 	});
 
 	// Make sure the response gets written to the server.
 	// We need to clone the response to avoid reading the
 	// same response body twice.
-	event.waitUntil(cache.put(cache_url, response.clone()));
+	ctx.waitUntil(cache.put(cache_url, response.clone()));
 
 	// And return it.
 	return response;
 }
 
 
-addEventListener('fetch', (event: FetchEvent) => {
-	// TODO: Origin checking
+export default {
+	fetch(request: Request, env: Environment, ctx: ExecutionContext) {
+		// Handle CORS Pre-Flight Requests
+		if ( request.method === 'OPTIONS' )
+			return new Response(null, {
+				status: 204,
+				statusText: 'No Content',
+				headers: GLOBAL_HEADERS
+			});
 
-	// Handle CORS Pre-Flight Requests
-	if ( event.request.method === 'OPTIONS' ) {
-		const resp = new Response(null, {
-			status: 204,
-			statusText: 'No Content',
-			headers: GLOBAL_HEADERS
-		});
+		// Parse the URL for routing and stuff.
+		const url = new URL(request.url);
 
-		event.respondWith(resp);
-		return;
-	}
+		// If we get a request for /ips, return a list of IP addresses
+		// that are relevant.
+		// TODO: Stop hardcoding this
+		if ( url.pathname === '/ips' )
+			return responseJSON({
+				"$comment": "Most FFZBot traffic comes from Cloudflare, as the bot is implemented as a Cloudflare Worker. The \"CF-Worker\" header should contain the value \"frankerfacez.com\" to verify the Worker is owned and operated by FrankerFaceZ. See https://docs.frankerfacez.com/dev/link-preview/robot for more on how to verify the identity of FFZBot.",
+				ipv4: [
+					'158.69.219.9'
+				],
+				ipv6: []
+			});
 
-	// Parse the URL for routing and stuff.
-	const url = new URL(event.request.url);
+		// If we get a request for /examples, return a list of example
+		// URLs from the service. This is lightweight and won't be called
+		// much so don't even bother with caching headers or anything.
+		if ( url.pathname === '/examples' )
+			return responseJSON({
+				examples: getService(env).getExamples()
+			});
 
-	// If we get a request for /ips, return a list of IP addresses
-	// that are relevant.
-	// TODO: Stop hardcoding this
-	if ( url.pathname === '/ips' ) {
-		event.respondWith(responseJSON({
-			"$comment": "Most FFZBot traffic comes from Cloudflare, as the bot is implemented as a Cloudflare Worker. The \"CF-Worker\" header should contain the value \"frankerfacez.com\" to verify the Worker is owned and operated by FrankerFaceZ. See https://docs.frankerfacez.com/dev/link-preview/robot for more on how to verify the identity of FFZBot.",
-			ipv4: [
-				'158.69.219.9'
-			],
-			ipv6: []
-		}));
-		return;
-	}
+		// Any other URL besides / is a 404.
+		else if ( url.pathname !== '/' )
+			return responseError(404, "Not Found");
 
-	// If we get a request for /examples, return a list of example
-	// URLs from the service. This is lightweight and won't be called
-	// much so don't even bother with caching headers or anything.
-	if ( url.pathname === '/examples' ) {
-		event.respondWith(responseJSON({
-			examples: service.getExamples()
-		}));
-		return;
-	}
+		// Now that we're handling root requests, check to see if the
+		// request included a target URL.
+		const target = url.searchParams.get('url');
 
-	// Any other URL besides / is a 404.
-	else if ( url.pathname !== '/' ) {
-		event.respondWith(responseError(404, "Not Found"));
-		return;
-	}
+		// If there's no target URL, and this is a navigate event (such
+		// as a user opening the URL directly) then redirect to the
+		// documentation website.
+		//
+		// If this is not a navigate event, then return a 400 error because
+		// no URL was provided.
+		if ( ! target ) {
+			const mode = request.headers.get('sec-fetch-mode');
+			if ( mode === 'navigate' )
+				return responseRedirect('https://docs.frankerfacez.com/dev/link-preview/robot');
 
-	// Now that we're handling root requests, check to see if the
-	// request included a target URL.
-	const target = url.searchParams.get('url');
-
-	// If there's no target URL, and this is a navigate event (such
-	// as a user opening the URL directly) then redirect to the
-	// documentation website.
-	//
-	// If this is not a navigate event, then return a 400 error because
-	// no URL was provided.
-	if ( ! target ) {
-		const mode = event.request.headers.get('sec-fetch-mode');
-		if ( mode === 'navigate' ) {
-			event.respondWith(responseRedirect('https://docs.frankerfacez.com/dev/link-preview/robot'));
-			return;
+			return responseError(400, "No URL was provided.");
 		}
 
-		event.respondWith(responseError(400, "No URL was provided."));
-		return;
-	}
+		// Check if this request should skip the cache or not.
+		const skip_cache = url.searchParams.get('skip_cache') === '1';
 
-	// Check if this request should skip the cache or not.
-	const skip_cache = url.searchParams.get('skip_cache') === '1';
-
-	// We do not let bots skip the cache, so check right now if this
-	// is a bot and forbid it.
-	if ( skip_cache ) {
-		const ua = event.request.headers.get('user-agent');
-		if ( isbot(ua) ) {
-			event.respondWith(responseError(403, "Bots are not allowed to use skip_cache at this time."));
-			return;
+		// We do not let bots skip the cache, so check right now if this
+		// is a bot and forbid it.
+		if ( skip_cache ) {
+			const ua = request.headers.get('user-agent');
+			if ( isbot(ua) )
+				return responseError(403, "Bots are not allowed to use skip_cache at this time.");
 		}
-	}
 
-	// Got here? Move over to the handle method then.
-	event.respondWith(handle(event, url.origin, target, skip_cache));
-});
+		// Got here? Move over to the handle method then.
+		return handle(request, url.origin, target, skip_cache, env, ctx);
+	}
+}

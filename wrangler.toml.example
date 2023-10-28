@@ -12,3 +12,8 @@ analytics_engine_datasets = [
 kv_namespaces = [
     { binding = "SESSION", id = "<KV_ID>" }
 ]
+
+[[d1_databases]]
+binding = "CACHE_DB"
+database_name = "<cache_db_name>"
+database_id = "<cache_db_id>"
